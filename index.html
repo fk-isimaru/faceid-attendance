@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>顔認証 入室システム</title>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/face-api.js/0.22.2/face-api.min.js"></script>
+  <script defer src="https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/dist/face-api.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;700&family=Share+Tech+Mono&display=swap');
 
@@ -676,7 +676,7 @@ function updateThreshold(v) {
 }
 
 // ====== Model Loading ======
-const MODEL_URL = 'https://cdn.jsdelivr.net/gh/vladmandic/face-api@master/model';
+const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
 
 async function loadModels() {
   setStatus('loading', 'AIモデルを読み込み中...');

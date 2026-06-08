@@ -451,6 +451,52 @@
     }
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+    /* ===== 体調チェック ===== */
+    .health-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      transition: border-color 0.2s;
+    }
+    .health-item.answered { border-color: var(--border); }
+    .health-label {
+      font-size: 14px;
+      flex: 1;
+    }
+    .health-btns {
+      display: flex;
+      gap: 6px;
+    }
+    .health-btn {
+      width: 44px;
+      height: 36px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      font-size: 18px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .health-btn:hover { transform: scale(1.1); }
+    .health-btn.sel-ok  { background: rgba(0,255,157,0.15); border-color: var(--accent2); box-shadow: 0 0 8px rgba(0,255,157,0.3); }
+    .health-btn.sel-ng  { background: rgba(255,77,109,0.15); border-color: var(--warn);   box-shadow: 0 0 8px rgba(255,77,109,0.3); }
+
+    /* ログ内の体調バッジ */
+    .health-summary {
+      font-size: 10px;
+      color: var(--muted);
+      font-family: 'Share Tech Mono', monospace;
+      margin-top: 2px;
+    }
+    .badge-ng { color: var(--warn); }
+
     /* modal */
     .modal-overlay {
       position: fixed;
@@ -625,11 +671,47 @@
   </div>
 </div>
 
+<!-- ====== 体調管理モーダル ====== -->
+<div class="modal-overlay" id="healthModal">
+  <div class="modal" style="max-width:420px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <span style="font-size:24px;">🏥</span>
+      <div>
+        <h3 style="margin:0;font-size:16px;">体調チェック</h3>
+        <div id="healthModalName" style="font-size:12px;color:var(--muted);font-family:'Share Tech Mono',monospace;"></div>
+      </div>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px;border-top:1px solid var(--border);padding-top:12px;">
+      本日最初の入室です。以下の項目を確認してください。
+    </p>
+    <div id="healthItems" style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;"></div>
+    <button class="btn btn-primary" onclick="submitHealth()">✅ \u00a0記録して入室</button>
+    <div id="healthError" style="margin-top:8px;font-size:12px;color:var(--warn);font-family:'Share Tech Mono',monospace;text-align:center;display:none;">
+      全項目を選択してください
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
 // ====== State ======
 let members = []; // {name, descriptor: Float32Array}
+
+// ====== 体調チェック項目（自由に編集可） ======
+const HEALTH_ITEMS = [
+  '発熱（37.5℃以上）はありませんか？',
+  '咳・鼻水などの症状はありませんか？',
+  '倦怠感・体のだるさはありませんか？',
+  '頭痛・腹痛などの痛みはありませんか？',
+  '嘔吐・下痢の症状はありませんか？',
+  '味覚・嗅覚に異常はありませんか？',
+  '十分な睡眠は取れましたか？',
+  '同居者に体調不良者はいませんか？'
+];
+
+let healthAnswers = {}; // {itemIndex: 'ok'|'ng'}
+let pendingHealthName = null; // 体調確認待ちの名前
 let log = [];
 let modelsLoaded = false;
 let recognizing = false;
@@ -761,18 +843,34 @@ async function capture() {
 
   if (bestDist < threshold) {
     showResult('success', '✓', bestName + ' さん');
-    setStatus('ready', '✓ ' + bestName + ' — 入室記録済み');
-    addLog(bestName);
-    sendToGAS(bestName);
+    // 本日初回かチェック
+    const today = new Date().toLocaleDateString('ja-JP');
+    const alreadyChecked = log.some(e => e.name === bestName && e.date === today);
+    if (!alreadyChecked) {
+      // 初回 → 体調チェックモーダルを表示
+      setTimeout(() => {
+        recognizing = false;
+        document.getElementById('captureBtn').disabled = false;
+        openHealthModal(bestName);
+      }, 1200);
+    } else {
+      // 2回目以降 → そのまま記録
+      setStatus('ready', '✓ ' + bestName + ' — 入室記録済み');
+      addLog(bestName, null);
+      sendToGAS(bestName, null);
+      setTimeout(() => {
+        recognizing = false;
+        document.getElementById('captureBtn').disabled = false;
+      }, 2500);
+    }
   } else {
     showResult('fail', '✗', '認識できません');
     setStatus('ready', '準備完了 — スキャンしてください');
+    setTimeout(() => {
+      recognizing = false;
+      document.getElementById('captureBtn').disabled = false;
+    }, 2500);
   }
-
-  setTimeout(() => {
-    recognizing = false;
-    document.getElementById('captureBtn').disabled = false;
-  }, 2500);
 }
 
 function showResult(type, icon, name) {
@@ -785,12 +883,13 @@ function showResult(type, icon, name) {
 }
 
 // ====== Log ======
-function addLog(name) {
+function addLog(name, health) {
   const now = new Date();
   const entry = {
     name,
     time: now.toTimeString().slice(0,5),
-    date: now.toLocaleDateString('ja-JP')
+    date: now.toLocaleDateString('ja-JP'),
+    health: health || null
   };
   log.unshift(entry);
   localStorage.setItem('faceid_log', JSON.stringify(log));
@@ -800,13 +899,23 @@ function addLog(name) {
 function renderLog() {
   const el = document.getElementById('logList');
   if (log.length === 0) { el.innerHTML = '<div class="empty-state">まだ記録がありません</div>'; return; }
-  el.innerHTML = log.map(e => `
-    <div class="log-item">
-      <div class="log-time">${e.time}</div>
-      <div class="log-name">${e.name}</div>
-      <div class="log-badge">入室</div>
-    </div>
-  `).join('');
+  el.innerHTML = log.map(e => {
+    let healthBadge = '';
+    if (e.health) {
+      const ngCount = Object.values(e.health).filter(v => v === 'ng').length;
+      const okCount = Object.values(e.health).filter(v => v === 'ok').length;
+      healthBadge = `<div class="health-summary">${ngCount > 0 ? '<span class="badge-ng">⚠ ×が' + ngCount + '項目</span>' : '体調良好 ✓'}</div>`;
+    }
+    return `
+    <div class="log-item" style="flex-direction:column;align-items:stretch;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="log-time">${e.time}</div>
+        <div class="log-name">${e.name}</div>
+        <div class="log-badge">入室</div>
+      </div>
+      ${healthBadge}
+    </div>`;
+  }).join('');
 }
 
 function clearLog() {
@@ -817,10 +926,13 @@ function clearLog() {
 }
 
 // ====== Google Apps Script ======
-async function sendToGAS(name) {
+async function sendToGAS(name, health) {
   if (!gasUrl) return;
   try {
     const now = new Date();
+    const healthSummary = health
+      ? HEALTH_ITEMS.map((item, i) => health[i] === 'ok' ? '○' : health[i] === 'ng' ? '×' : '-').join(',')
+      : '';
     await fetch(gasUrl, {
       method: 'POST',
       mode: 'no-cors',
@@ -828,7 +940,8 @@ async function sendToGAS(name) {
       body: JSON.stringify({
         name,
         date: now.toLocaleDateString('ja-JP'),
-        time: now.toTimeString().slice(0,8)
+        time: now.toTimeString().slice(0,8),
+        health: healthSummary
       })
     });
   } catch(e) { console.warn('GAS送信エラー', e); }
@@ -950,6 +1063,54 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+
+// ====== 体調チェックモーダル ======
+function openHealthModal(name) {
+  pendingHealthName = name;
+  healthAnswers = {};
+  document.getElementById('healthModalName').textContent = name + ' さん';
+  document.getElementById('healthError').style.display = 'none';
+
+  const container = document.getElementById('healthItems');
+  container.innerHTML = HEALTH_ITEMS.map((item, i) => `
+    <div class="health-item" id="hitem-${i}">
+      <div class="health-label">${item}</div>
+      <div class="health-btns">
+        <button class="health-btn" id="hok-${i}" onclick="answerHealth(${i},'ok')" title="問題なし">⭕</button>
+        <button class="health-btn" id="hng-${i}" onclick="answerHealth(${i},'ng')" title="該当する">❌</button>
+      </div>
+    </div>
+  `).join('');
+
+  document.getElementById('healthModal').classList.add('open');
+}
+
+function answerHealth(idx, val) {
+  healthAnswers[idx] = val;
+  document.getElementById('hok-' + idx).className = 'health-btn' + (val === 'ok' ? ' sel-ok' : '');
+  document.getElementById('hng-' + idx).className = 'health-btn' + (val === 'ng' ? ' sel-ng' : '');
+  document.getElementById('hitem-' + idx).classList.add('answered');
+}
+
+function submitHealth() {
+  // 未回答チェック
+  const unanswered = HEALTH_ITEMS.some((_, i) => healthAnswers[i] === undefined);
+  if (unanswered) {
+    document.getElementById('healthError').style.display = 'block';
+    return;
+  }
+  document.getElementById('healthError').style.display = 'none';
+  document.getElementById('healthModal').classList.remove('open');
+
+  const name = pendingHealthName;
+  const health = { ...healthAnswers };
+  setStatus('ready', '✓ ' + name + ' — 入室記録済み');
+  addLog(name, health);
+  sendToGAS(name, health);
+  pendingHealthName = null;
+  healthAnswers = {};
 }
 
 // ====== Init ======
